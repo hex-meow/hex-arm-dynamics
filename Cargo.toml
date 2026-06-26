@@ -2,7 +2,12 @@
 name = "hex-arm-dynamics"
 version = "0.1.0"
 edition = "2021"
-description = "串联机械臂动力学(从 URDF):正运动学 + 重力力矩 G(q)。仅依赖 urdf-rs,手写线代(无 nalgebra)。供控制器 GRAVITY_COMP、host 端 tau_ff 前馈、仿真重力负载共用同一模型。"
+authors = ["kisonhe <kisonhe@hexmeow.com>"]
+license = "MIT"
+description = "Serial-arm kinematics and gravity torque G(q) from a URDF: forward kinematics + gravity compensation, hand-rolled linear algebra (urdf-rs only, no nalgebra). One shared model for controller gravity-comp, host-side tau_ff feedforward, and sim gravity load."
+repository = "https://github.com/hex-meow/hex-arm-dynamics"
+keywords = ["robotics", "urdf", "kinematics", "gravity", "manipulator"]
+categories = ["science::robotics", "mathematics"]
 
 [dependencies]
 anyhow = "1"
