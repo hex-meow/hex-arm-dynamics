@@ -69,18 +69,99 @@ fn axis_angle_to_mat(axis: V3, ang: f32) -> M3 {
     ]
 }
 
+#[derive(Clone)]
 struct JointDef {
     origin_xyz: V3,
     origin_rot: M3,
     axis: V3,
 }
+#[derive(Clone)]
 struct LinkDef {
     mass: f32,
     com: V3, // 在该 link 坐标系
     mesh: Option<String>,
 }
 
+/// URDF 片段(EE/工具)的**集总惯量**:零位形下沿 joint origin 变换遍历整棵树(任意
+/// joint 类型、支持分叉),把所有 link 的 (mass, com) 汇总为「根 link 坐标系」下的
+/// (总质量, 总 COM)。用途:把 EE 折叠为臂 tip 的固定载荷(gravity comp)——抓手自身
+/// 关节运动带来的 COM 偏移在此近似下忽略。无 inertial 的 link 记 0 质量;总质量为 0
+/// 时返回 (0, [0;3])(调用侧自行告警)。
+pub fn lumped_inertial_from_urdf_string(xml: &str) -> Result<(f32, [f32; 3])> {
+    let robot = urdf_rs::read_from_string(xml).map_err(|e| anyhow!("解析 URDF 字串: {e}"))?;
+    let mv = |m: &M3, v: &V3| -> V3 {
+        [
+            m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+            m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+            m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+        ]
+    };
+    let mm = |a: &M3, b: &M3| -> M3 {
+        let mut r = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                r[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+            }
+        }
+        r
+    };
+    // link 名 → (mass, com)
+    let mut info: std::collections::HashMap<&str, (f32, V3)> = std::collections::HashMap::new();
+    for l in &robot.links {
+        let (mass, com) = if l.inertial.mass.value > 0.0 {
+            (
+                l.inertial.mass.value as f32,
+                [l.inertial.origin.xyz[0] as f32, l.inertial.origin.xyz[1] as f32, l.inertial.origin.xyz[2] as f32],
+            )
+        } else {
+            (0.0, [0.0; 3])
+        };
+        info.insert(l.name.as_str(), (mass, com));
+    }
+    // 根 = 从不作为 child 的 link
+    let children: std::collections::HashSet<&str> = robot.joints.iter().map(|j| j.child.link.as_str()).collect();
+    let root = robot
+        .links
+        .iter()
+        .map(|l| l.name.as_str())
+        .find(|n| !children.contains(n))
+        .ok_or_else(|| anyhow!("URDF 片段找不到根 link"))?;
+    // BFS:accumulate (rot, pos) —— 零位形,只用 joint origin
+    let mut total_m = 0.0f32;
+    let mut moment = [0.0f32; 3];
+    let mut queue: Vec<(&str, M3, V3)> = vec![(root, identity(), [0.0; 3])];
+    while let Some((name, rot, pos)) = queue.pop() {
+        if let Some((m, com)) = info.get(name) {
+            if *m > 0.0 {
+                let world = {
+                    let rc = mv(&rot, com);
+                    [pos[0] + rc[0], pos[1] + rc[1], pos[2] + rc[2]]
+                };
+                total_m += m;
+                for k in 0..3 {
+                    moment[k] += m * world[k];
+                }
+            }
+        }
+        for j in robot.joints.iter().filter(|j| j.parent.link == name) {
+            let jrot = rpy_to_mat(j.origin.rpy[0] as f32, j.origin.rpy[1] as f32, j.origin.rpy[2] as f32);
+            let jxyz = [j.origin.xyz[0] as f32, j.origin.xyz[1] as f32, j.origin.xyz[2] as f32];
+            let step = mv(&rot, &jxyz);
+            queue.push((
+                j.child.link.as_str(),
+                mm(&rot, &jrot),
+                [pos[0] + step[0], pos[1] + step[1], pos[2] + step[2]],
+            ));
+        }
+    }
+    if total_m <= 0.0 {
+        return Ok((0.0, [0.0; 3]));
+    }
+    Ok((total_m, [moment[0] / total_m, moment[1] / total_m, moment[2] / total_m]))
+}
+
 /// 串联臂的动力学/运动学模型。
+#[derive(Clone)]
 pub struct ArmDynamics {
     joints: Vec<JointDef>,
     links: Vec<LinkDef>,
@@ -197,6 +278,24 @@ impl ArmDynamics {
     }
 
     /// 重力力矩 `G(q)`,用模型自带的重力向量(默认 [0,0,-9.81])。
+    /// 把固定 tip 载荷(如 EE 集总惯量)折叠进**最后一个 link**:质量相加、COM 按质量
+    /// 加权合并。`com` 在最后一个 link 坐标系表达(EE 以单位变换 fixed joint 挂 tip 时,
+    /// 即 EE 挂载根系 == tip link 系)。返回新模型,原模型不变(便于换 EE 时从原模型重折)。
+    pub fn with_tip_payload(&self, mass: f32, com: [f32; 3]) -> Self {
+        let mut m = self.clone();
+        if mass > 0.0 {
+            if let Some(last) = m.links.last_mut() {
+                let m0 = last.mass;
+                let mt = m0 + mass;
+                for k in 0..3 {
+                    last.com[k] = (m0 * last.com[k] + mass * com[k]) / mt;
+                }
+                last.mass = mt;
+            }
+        }
+        m
+    }
+
     pub fn gravity_torque(&self, q: &[f32]) -> Vec<f32> {
         self.gravity_torque_with(q, self.gravity)
     }
@@ -271,5 +370,41 @@ mod tests {
         assert!((g[1].abs() - 1.0 * G_ACC * l).abs() < 1e-2);
         // joint1 托两根:link1 质心 x=l,link2 质心 x=2l → |G1| = g·(l + 2l) = 3 g l
         assert!((g[0].abs() - G_ACC * 3.0 * l).abs() < 1e-2);
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    const EE: &str = r#"<robot name="ee">
+      <link name="ee_base"><inertial><origin xyz="0 0 0.05"/><mass value="0.4"/><inertia ixx="1e-4" iyy="1e-4" izz="1e-4" ixy="0" ixz="0" iyz="0"/></inertial></link>
+      <link name="finger"><inertial><origin xyz="0 0 0.01"/><mass value="0.1"/><inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/></inertial></link>
+      <joint name="j" type="revolute"><origin xyz="0 0 0.1" rpy="0 0 0"/><parent link="ee_base"/><child link="finger"/><axis xyz="0 0 1"/><limit lower="0" upper="1" effort="1" velocity="1"/></joint>
+    </robot>"#;
+
+    #[test]
+    fn lumped_inertial_tree_at_zero_pose() {
+        let (m, com) = lumped_inertial_from_urdf_string(EE).unwrap();
+        // 总质量 0.5;COM_z = (0.4*0.05 + 0.1*(0.1+0.01))/0.5 = 0.062
+        assert!((m - 0.5).abs() < 1e-6);
+        assert!((com[2] - 0.062).abs() < 1e-6, "com={com:?}");
+        assert!(com[0].abs() < 1e-6 && com[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn tip_payload_folds_into_gravity_torque() {
+        // 单关节水平臂:关节在原点绕 y,link COM 在 x=1、质量 1kg → G = -(-9.81) 视符号约定
+        let arm = ArmDynamics::from_parts(
+            vec![([0.0, 0.0, 0.0], identity(), [0.0, 1.0, 0.0])],
+            vec![(1.0, [1.0, 0.0, 0.0])],
+            [0.0, 0.0, -9.81],
+        );
+        let g0 = arm.gravity_torque(&[0.0])[0];
+        // 折叠 1kg 载荷在同一 COM → 力矩恰好翻倍
+        let g1 = arm.with_tip_payload(1.0, [1.0, 0.0, 0.0]).gravity_torque(&[0.0])[0];
+        assert!((g1 - 2.0 * g0).abs() < 1e-4, "g0={g0} g1={g1}");
+        // 原模型不受影响
+        assert!((arm.gravity_torque(&[0.0])[0] - g0).abs() < 1e-9);
     }
 }
