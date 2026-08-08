@@ -19,12 +19,24 @@ const G_ACC: f32 = 9.81;
 
 // ── 极简线代 ──
 fn cross(a: V3, b: V3) -> V3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
-fn dot(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
-fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
-fn add(a: V3, b: V3) -> V3 { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
-fn scale(a: V3, s: f32) -> V3 { [a[0] * s, a[1] * s, a[2] * s] }
+fn dot(a: V3, b: V3) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn sub(a: V3, b: V3) -> V3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn add(a: V3, b: V3) -> V3 {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn scale(a: V3, s: f32) -> V3 {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
 fn matvec(m: &M3, v: V3) -> V3 {
     [
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
@@ -41,7 +53,9 @@ fn matmul(a: &M3, b: &M3) -> M3 {
     }
     r
 }
-fn identity() -> M3 { [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] }
+fn identity() -> M3 {
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+}
 
 /// URDF rpy(固定轴 XYZ):R = Rz(yaw)·Ry(pitch)·Rx(roll)。
 fn rpy_to_mat(r: f32, p: f32, y: f32) -> M3 {
@@ -58,14 +72,28 @@ fn rpy_to_mat(r: f32, p: f32, y: f32) -> M3 {
 /// Rodrigues:绕单位轴 `axis` 转 `ang`。
 fn axis_angle_to_mat(axis: V3, ang: f32) -> M3 {
     let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-    if n < 1e-9 { return identity(); }
+    if n < 1e-9 {
+        return identity();
+    }
     let k = [axis[0] / n, axis[1] / n, axis[2] / n];
     let (s, c) = (ang.sin(), ang.cos());
     let v = 1.0 - c;
     [
-        [c + k[0] * k[0] * v, k[0] * k[1] * v - k[2] * s, k[0] * k[2] * v + k[1] * s],
-        [k[1] * k[0] * v + k[2] * s, c + k[1] * k[1] * v, k[1] * k[2] * v - k[0] * s],
-        [k[2] * k[0] * v - k[1] * s, k[2] * k[1] * v + k[0] * s, c + k[2] * k[2] * v],
+        [
+            c + k[0] * k[0] * v,
+            k[0] * k[1] * v - k[2] * s,
+            k[0] * k[2] * v + k[1] * s,
+        ],
+        [
+            k[1] * k[0] * v + k[2] * s,
+            c + k[1] * k[1] * v,
+            k[1] * k[2] * v - k[0] * s,
+        ],
+        [
+            k[2] * k[0] * v - k[1] * s,
+            k[2] * k[1] * v + k[0] * s,
+            c + k[2] * k[2] * v,
+        ],
     ]
 }
 
@@ -111,7 +139,11 @@ pub fn lumped_inertial_from_urdf_string(xml: &str) -> Result<(f32, [f32; 3])> {
         let (mass, com) = if l.inertial.mass.value > 0.0 {
             (
                 l.inertial.mass.value as f32,
-                [l.inertial.origin.xyz[0] as f32, l.inertial.origin.xyz[1] as f32, l.inertial.origin.xyz[2] as f32],
+                [
+                    l.inertial.origin.xyz[0] as f32,
+                    l.inertial.origin.xyz[1] as f32,
+                    l.inertial.origin.xyz[2] as f32,
+                ],
             )
         } else {
             (0.0, [0.0; 3])
@@ -119,7 +151,8 @@ pub fn lumped_inertial_from_urdf_string(xml: &str) -> Result<(f32, [f32; 3])> {
         info.insert(l.name.as_str(), (mass, com));
     }
     // 根 = 从不作为 child 的 link
-    let children: std::collections::HashSet<&str> = robot.joints.iter().map(|j| j.child.link.as_str()).collect();
+    let children: std::collections::HashSet<&str> =
+        robot.joints.iter().map(|j| j.child.link.as_str()).collect();
     let root = robot
         .links
         .iter()
@@ -144,8 +177,16 @@ pub fn lumped_inertial_from_urdf_string(xml: &str) -> Result<(f32, [f32; 3])> {
             }
         }
         for j in robot.joints.iter().filter(|j| j.parent.link == name) {
-            let jrot = rpy_to_mat(j.origin.rpy[0] as f32, j.origin.rpy[1] as f32, j.origin.rpy[2] as f32);
-            let jxyz = [j.origin.xyz[0] as f32, j.origin.xyz[1] as f32, j.origin.xyz[2] as f32];
+            let jrot = rpy_to_mat(
+                j.origin.rpy[0] as f32,
+                j.origin.rpy[1] as f32,
+                j.origin.rpy[2] as f32,
+            );
+            let jxyz = [
+                j.origin.xyz[0] as f32,
+                j.origin.xyz[1] as f32,
+                j.origin.xyz[2] as f32,
+            ];
             let step = mv(&rot, &jxyz);
             queue.push((
                 j.child.link.as_str(),
@@ -157,7 +198,14 @@ pub fn lumped_inertial_from_urdf_string(xml: &str) -> Result<(f32, [f32; 3])> {
     if total_m <= 0.0 {
         return Ok((0.0, [0.0; 3]));
     }
-    Ok((total_m, [moment[0] / total_m, moment[1] / total_m, moment[2] / total_m]))
+    Ok((
+        total_m,
+        [
+            moment[0] / total_m,
+            moment[1] / total_m,
+            moment[2] / total_m,
+        ],
+    ))
 }
 
 /// 串联臂的动力学/运动学模型。
@@ -195,7 +243,11 @@ impl ArmDynamics {
             let (mass, com) = match &l.inertial {
                 i if i.mass.value > 0.0 => (
                     i.mass.value as f32,
-                    [i.origin.xyz[0] as f32, i.origin.xyz[1] as f32, i.origin.xyz[2] as f32],
+                    [
+                        i.origin.xyz[0] as f32,
+                        i.origin.xyz[1] as f32,
+                        i.origin.xyz[2] as f32,
+                    ],
                 ),
                 _ => (0.0, [0.0; 3]),
             };
@@ -217,8 +269,11 @@ impl ArmDynamics {
             .ok_or_else(|| anyhow!("URDF 找不到根 link"))?;
 
         // 从根沿 parent→child 串起来
-        let joint_by_parent: HashMap<&str, &urdf_rs::Joint> =
-            robot.joints.iter().map(|j| (j.parent.link.as_str(), j)).collect();
+        let joint_by_parent: HashMap<&str, &urdf_rs::Joint> = robot
+            .joints
+            .iter()
+            .map(|j| (j.parent.link.as_str(), j))
+            .collect();
 
         let mut joints = Vec::new();
         let mut links = Vec::new();
@@ -226,30 +281,80 @@ impl ArmDynamics {
         while let Some(j) = joint_by_parent.get(cur) {
             match &j.joint_type {
                 urdf_rs::JointType::Revolute | urdf_rs::JointType::Continuous => {}
-                other => return Err(anyhow!("joint {} 类型 {:?} 暂不支持(只支持 revolute 串联)", j.name, other)),
+                other => {
+                    return Err(anyhow!(
+                        "joint {} 类型 {:?} 暂不支持(只支持 revolute 串联)",
+                        j.name,
+                        other
+                    ))
+                }
             }
             joints.push(JointDef {
-                origin_xyz: [j.origin.xyz[0] as f32, j.origin.xyz[1] as f32, j.origin.xyz[2] as f32],
-                origin_rot: rpy_to_mat(j.origin.rpy[0] as f32, j.origin.rpy[1] as f32, j.origin.rpy[2] as f32),
-                axis: [j.axis.xyz[0] as f32, j.axis.xyz[1] as f32, j.axis.xyz[2] as f32],
+                origin_xyz: [
+                    j.origin.xyz[0] as f32,
+                    j.origin.xyz[1] as f32,
+                    j.origin.xyz[2] as f32,
+                ],
+                origin_rot: rpy_to_mat(
+                    j.origin.rpy[0] as f32,
+                    j.origin.rpy[1] as f32,
+                    j.origin.rpy[2] as f32,
+                ),
+                axis: [
+                    j.axis.xyz[0] as f32,
+                    j.axis.xyz[1] as f32,
+                    j.axis.xyz[2] as f32,
+                ],
             });
             let child = j.child.link.as_str();
-            links.push(link_info.remove(child).ok_or_else(|| anyhow!("link {child} 缺 inertial"))?);
+            links.push(
+                link_info
+                    .remove(child)
+                    .ok_or_else(|| anyhow!("link {child} 缺 inertial"))?,
+            );
             cur = child;
         }
         if joints.is_empty() {
             return Err(anyhow!("URDF 没解析出任何 revolute 关节"));
         }
-        Ok(Self { joints, links, gravity: [0.0, 0.0, -G_ACC] })
+        Ok(Self {
+            joints,
+            links,
+            gravity: [0.0, 0.0, -G_ACC],
+        })
     }
 
-    pub fn dof(&self) -> usize { self.joints.len() }
+    pub fn dof(&self) -> usize {
+        self.joints.len()
+    }
 
     /// 直接构造(测试用)。
-    pub fn from_parts(joints_data: Vec<(V3, M3, V3)>, links_data: Vec<(f32, V3)>, gravity: V3) -> Self {
-        let joints = joints_data.into_iter().map(|(origin_xyz, origin_rot, axis)| JointDef { origin_xyz, origin_rot, axis }).collect();
-        let links = links_data.into_iter().map(|(mass, com)| LinkDef { mass, com, mesh: None }).collect();
-        Self { joints, links, gravity }
+    pub fn from_parts(
+        joints_data: Vec<(V3, M3, V3)>,
+        links_data: Vec<(f32, V3)>,
+        gravity: V3,
+    ) -> Self {
+        let joints = joints_data
+            .into_iter()
+            .map(|(origin_xyz, origin_rot, axis)| JointDef {
+                origin_xyz,
+                origin_rot,
+                axis,
+            })
+            .collect();
+        let links = links_data
+            .into_iter()
+            .map(|(mass, com)| LinkDef {
+                mass,
+                com,
+                mesh: None,
+            })
+            .collect();
+        Self {
+            joints,
+            links,
+            gravity,
+        }
     }
 
     /// FK 内核:返回每个关节的(世界轴, 世界原点)与每个 link 的(世界旋转, 世界原点, 世界质心)。
@@ -320,7 +425,15 @@ impl ArmDynamics {
     /// 各 link 世界位姿(供 rerun 可视化)。
     pub fn link_poses(&self, q: &[f32]) -> Vec<LinkPose> {
         let (_, link_world) = self.forward(q);
-        link_world.iter().enumerate().map(|(i, (rot, pos, _))| LinkPose { rot: *rot, pos: *pos, mesh_idx: i }).collect()
+        link_world
+            .iter()
+            .enumerate()
+            .map(|(i, (rot, pos, _))| LinkPose {
+                rot: *rot,
+                pos: *pos,
+                mesh_idx: i,
+            })
+            .collect()
     }
 
     /// 各 link 的网格文件名(package:// 形式,可能为 None)。
@@ -345,7 +458,12 @@ mod tests {
             [0.0, 0.0, -G_ACC],
         );
         let g0 = dyn_.gravity_torque(&[0.0]);
-        assert!((g0[0] - (-m * G_ACC * l)).abs() < 1e-3, "G(0)={} 期望 {}", g0[0], -m * G_ACC * l);
+        assert!(
+            (g0[0] - (-m * G_ACC * l)).abs() < 1e-3,
+            "G(0)={} 期望 {}",
+            g0[0],
+            -m * G_ACC * l
+        );
 
         // 转到质心朝正下方(绕 +y 转 +90° 把 +x 转到 -z)→ 力臂为零
         let g90 = dyn_.gravity_torque(&[std::f32::consts::FRAC_PI_2]);
@@ -402,7 +520,9 @@ mod payload_tests {
         );
         let g0 = arm.gravity_torque(&[0.0])[0];
         // 折叠 1kg 载荷在同一 COM → 力矩恰好翻倍
-        let g1 = arm.with_tip_payload(1.0, [1.0, 0.0, 0.0]).gravity_torque(&[0.0])[0];
+        let g1 = arm
+            .with_tip_payload(1.0, [1.0, 0.0, 0.0])
+            .gravity_torque(&[0.0])[0];
         assert!((g1 - 2.0 * g0).abs() < 1e-4, "g0={g0} g1={g1}");
         // 原模型不受影响
         assert!((arm.gravity_torque(&[0.0])[0] - g0).abs() < 1e-9);
